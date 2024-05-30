@@ -1,48 +1,95 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"io/ioutil"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 )
 
-var swaggerJSON []byte
+type OpenAPI struct {
+	Swagger string `json:"swagger"`
+	Info    struct {
+		Title   string `json:"title"`
+		Version string `json:"version"`
+	} `json:"info"`
+	Paths map[string]interface{} `json:"paths"`
+}
 
-func fetchSwaggerJSON(url string) ([]byte, error) {
-	resp, err := http.Get(url)
+func fetchOpenAPIV2JSON(clientset *kubernetes.Clientset) ([]byte, error) {
+	req := clientset.Discovery().RESTClient().Get().AbsPath("/openapi/v2")
+	return req.Do(context.TODO()).Raw()
+}
+
+func parseOpenAPI(data []byte) (*OpenAPI, error) {
+	var openAPI OpenAPI
+	err := json.Unmarshal(data, &openAPI)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
+	return &openAPI, nil
 }
 
 func main() {
 	r := gin.Default()
 
-	var err error
-	swaggerJSON, err = fetchSwaggerJSON("http://localhost:8000/openapi/v2")
+	kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		log.Fatalf("Failed to fetch Swagger JSON: %v", err)
+		fmt.Printf("Error building kubeconfig: %s\n", err.Error())
+		return
 	}
 
-	// Serve the Swagger JSON
-	r.GET("/swagger", func(c *gin.Context) {
-		c.Data(http.StatusOK, "application/json", swaggerJSON)
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		fmt.Printf("Error creating Kubernetes client: %s\n", err.Error())
+		return
+	}
+
+	r.Any("/*path", func(c *gin.Context) {
+		forwardRequest(c, clientset)
+	})
+
+	r.GET("/swagger.json", func(c *gin.Context) {
+		data, err := fetchOpenAPIV2JSON(clientset)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		openAPI, err := parseOpenAPI(data)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, openAPI)
 	})
 
 	// Integrate Swagger UI
-	r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger")))
-	r.Use(requestForwarderMiddleware("http://localhost:8000"))
+	// r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
+
 	log.Fatal(r.Run(":8080"))
+}
+
+func forwardRequest(c *gin.Context, clientset *kubernetes.Clientset) {
+	req := clientset.Discovery().RESTClient().Verb(c.Request.Method).AbsPath(c.Request.RequestURI).Body(c.Request.Body).SetHeader("Content-Type", c.ContentType())
+
+	result := req.Do(context.TODO())
+	rawBody, err := result.Raw()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", rawBody)
 }
 
 func requestForwarderMiddleware(targetURL string) gin.HandlerFunc {
