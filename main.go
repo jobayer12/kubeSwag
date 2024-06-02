@@ -1,12 +1,13 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"io/ioutil"
 	"log"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 var swaggerJSON []byte
@@ -60,6 +61,9 @@ func requestForwarderMiddleware(targetURL string) gin.HandlerFunc {
 				req.Header.Add(key, value)
 			}
 		}
+		// Ensure Content-Type header is set
+		req.Header.Set("Content-Type", "application/json")
+
 		// Send the request
 		client := &http.Client{}
 		resp, err := client.Do(req)
@@ -70,7 +74,7 @@ func requestForwarderMiddleware(targetURL string) gin.HandlerFunc {
 		defer resp.Body.Close()
 
 		// Read the response body
-		body, err := ioutil.ReadAll(resp.Body)
+		respBody, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Failed to read response"})
 			return
@@ -87,7 +91,7 @@ func requestForwarderMiddleware(targetURL string) gin.HandlerFunc {
 		}
 
 		// Set the response body
-		c.Writer.Write(body)
+		c.Writer.Write(respBody)
 
 		// Abort the context to prevent further processing
 		c.Abort()
