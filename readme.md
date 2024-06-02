@@ -47,4 +47,4 @@ go get github.com/swaggo/gin-swagger
 - `/*any`: Forwards all other requests to the upstream server.
 
 
-Feel free to contribute to this project by submitting issues or pull requests. For any questions or support, please contact jobayer.cse43.diu@gmail.com
+Feel free to contribute to this project by submitting issues or pull requests.
